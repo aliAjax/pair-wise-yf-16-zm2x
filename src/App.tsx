@@ -1,126 +1,112 @@
+import { useEffect, useMemo, useState } from "react";
 import "./styles.css";
-
-const project = {
-  "sourceNo": 6,
-  "id": "hxyfront-62004",
-  "port": 62004,
-  "title": "滑雪板调校维护",
-  "domain": "滑雪装备调校",
-  "prompt": "我想做一个面向滑雪板调校店的装备维护前端系统，技师可以记录雪板品牌、长度、板型、刃角、打蜡类型、底板损伤、修补位置和客户偏好。页面需要有维护工单列表、刃角参数表、底板损伤标记区、完工状态筛选和客户历史维护记录。",
-  "palette": [
-    "#0369a1",
-    "#14b8a6",
-    "#f97316"
-  ],
-  "metrics": [
-    "待维护",
-    "完工工单",
-    "平均刃角",
-    "底板修补"
-  ],
-  "filters": [
-    "全地域",
-    "公园板",
-    "竞速板",
-    "粉雪板"
-  ],
-  "fields": [
-    "雪板品牌",
-    "长度",
-    "板型",
-    "刃角",
-    "打蜡类型",
-    "底板损伤"
-  ],
-  "records": [
-    [
-      "ORD-106",
-      "Burton 156",
-      "侧刃88°，底刃1°",
-      "已打低温蜡"
-    ],
-    [
-      "ORD-112",
-      "竞速板165",
-      "底板划痕12cm",
-      "待补P-Tex"
-    ],
-    [
-      "ORD-118",
-      "粉雪板158",
-      "客户偏好弱咬雪",
-      "待交付"
-    ]
-  ]
-};
+import type { Order } from "./types";
+import { clearOrders, loadOrders, persistOrders } from "./domain";
+import { IntakeForm } from "./components/IntakeForm";
+import { OrderBoard } from "./components/OrderBoard";
+import { CustomerHistory } from "./components/CustomerHistory";
 
 function App() {
+  const [orders, setOrders] = useState<Order[]>(() => loadOrders());
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    const initial = loadOrders();
+    const first = [...initial].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    return first?.id ?? null;
+  });
+
+  useEffect(() => {
+    persistOrders(orders);
+  }, [orders]);
+
+  const metrics = useMemo(() => {
+    const repairing = orders.filter((o) => o.status === "repairing").length;
+    const recheck = orders.filter((o) => o.status === "recheck").length;
+    const readyOrders = orders.filter((o) => o.status === "ready");
+    const heldMissing = readyOrders.reduce((n, o) => {
+      const last = o.attempts[o.attempts.length - 1];
+      return n + (last && !last.delivered ? last.missing.length : 0);
+    }, 0);
+    const delivered = orders.filter((o) => o.status === "delivered").length;
+    return [
+      { key: "repairing", label: "维修中（核对有效）", value: repairing, tone: "blue" as const },
+      { key: "recheck", label: "待复核（旧核对已作废）", value: recheck, tone: "amber" as const },
+      {
+        key: "ready",
+        label: "待取板",
+        value: readyOrders.length,
+        sub: heldMissing ? `缺项留存 ${heldMissing} 项` : "均可核验",
+        tone: "teal" as const,
+      },
+      { key: "delivered", label: "已交付", value: delivered, tone: "green" as const },
+    ];
+  }, [orders]);
+
+  const upsert = (order: Order) => {
+    setOrders((prev) => {
+      const exists = prev.some((o) => o.id === order.id);
+      return exists ? prev.map((o) => (o.id === order.id ? order : o)) : [order, ...prev];
+    });
+    setSelectedId(order.id);
+  };
+
+  const resetDemo = () => {
+    if (window.confirm("确定清空当前浏览器数据并恢复演示工单？")) {
+      const fresh = clearOrders();
+      setOrders(fresh);
+      setSelectedId(fresh[0]?.id ?? null);
+    }
+  };
+
+  const readyWithMissing = orders
+    .filter((o) => o.status === "ready")
+    .some((o) => {
+      const last = o.attempts[o.attempts.length - 1];
+      return last && !last.delivered && last.missing.length > 0;
+    });
+
   return (
     <main className="app">
       <section className="hero">
-        <p>{project.id} · 源提示词{project.sourceNo} · Port {project.port}</p>
-        <h1>{project.title}</h1>
-        <span>{project.prompt}</span>
+        <p>hxyfront-62004 · 收板与交付核验台</p>
+        <h1>滑雪板送修 · 随板固定器与附件核验</h1>
+        <span>
+          固定器和附件袋跟板留下：收板时登记固定器编号、孔位、附件与客户确认方式；维修中刃角、蜡型或修补一旦有变化，先前核对作废、工单回待复核并保留旧记录；取板逐项对上且客户确认匹配方可交付，缺项一律留存待取并列清单。所有数据只存本浏览器。
+        </span>
+        <div className="hero-actions">
+          <span className="local-note">数据保存在 localStorage，不上传服务器</span>
+          <button type="button" onClick={resetDemo}>
+            恢复演示数据
+          </button>
+        </div>
       </section>
 
       <section className="metrics">
-        {project.metrics.map((metric: string, index: number) => (
-          <article key={metric}>
-            <small>{metric}</small>
-            <strong>{[86, 14, 7, 32][index] ?? 12}</strong>
+        {metrics.map((m) => (
+          <article key={m.key} className={`metric metric-${m.tone}`}>
+            <small>{m.label}</small>
+            <strong>{m.value}</strong>
+            {m.sub && <em className="metric-sub">{m.sub}</em>}
           </article>
         ))}
       </section>
 
-      <section className="workspace">
-        <aside className="panel">
-          <h2>{project.domain}筛选</h2>
-          <div className="chips">
-            {project.filters.map((item: string) => (
-              <button key={item}>{item}</button>
-            ))}
-          </div>
-        </aside>
-
-        <section className="panel form-panel">
-          <div className="heading">
-            <div>
-              <p>专业字段</p>
-              <h2>新增记录</h2>
-            </div>
-            <button className="primary">保存草稿</button>
-          </div>
-          <div className="field-grid">
-            {project.fields.map((field: string) => (
-              <label key={field}>
-                <span>{field}</span>
-                <input placeholder={"填写" + field} />
-              </label>
-            ))}
-          </div>
-        </section>
-      </section>
-
-      <section className="panel">
-        <div className="heading">
-          <div>
-            <p>历史记录</p>
-            <h2>近期工作台</h2>
-          </div>
-          <button>导出摘要</button>
+      {readyWithMissing && (
+        <div className="alert warning banner">
+          有待取板工单存在缺项：已按规则留存待取，缺项清单见工单内「历次取板核验」。
         </div>
-        <div className="records">
-          {project.records.map((record: string[], index: number) => (
-            <article key={record.join("-")}>
-              <b>{String(index + 1).padStart(2, "0")}</b>
-              <div>
-                <h3>{record[0]}</h3>
-                <p>{record.slice(1).join(" · ")}</p>
-              </div>
-            </article>
-          ))}
-        </div>
-      </section>
+      )}
+
+      <OrderBoard orders={orders} selectedId={selectedId} onSelect={setSelectedId} onMutate={upsert} />
+
+      <IntakeForm onCreate={upsert} />
+
+      <CustomerHistory orders={orders} />
+
+      <footer className="footnote">
+        收板、复核、交付快照均写入浏览器本地存储（{`localStorage["ski-check-desk:v1"]`}），清空浏览器数据后记录将消失。
+        当前共 {orders.length} 张工单，
+        {orders.reduce((n, o) => n + o.checks.length, 0)} 份核对快照（含作废留存）。
+      </footer>
     </main>
   );
 }
